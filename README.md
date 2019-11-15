@@ -1,6 +1,6 @@
 # 🎨 texture-synthesis
 
-[![Build Status](https://travis-ci.com/EmbarkStudios/texture-synthesis.svg?branch=master)](https://travis-ci.com/EmbarkStudios/texture-synthesis)
+[![Build Status](https://github.com/EmbarkStudios/texture-synthesis/workflows/CI/badge.svg)](https://github.com/EmbarkStudios/texture-synthesis/actions?workflow=CI)
 [![Crates.io](https://img.shields.io/crates/v/texture-synthesis.svg)](https://crates.io/crates/texture-synthesis)
 [![Docs](https://docs.rs/texture-synthesis/badge.svg)](https://docs.rs/texture-synthesis)
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4%20adopted-ff69b4.svg)](CODE_OF_CONDUCT.md)
@@ -269,7 +269,43 @@ fn main() -> Result<(), ts::Error> {
 You should get the following result with the images provided in this repo:
 <img src="https://i.imgur.com/foSlREz.jpg" width="600" height="364">
 
-### 7. Combining texture synthesis 'verbs'
+### 7. Repeat texture synthesis transform on a new image
+
+![](https://i.imgur.com/WEf6iir.jpg)
+
+We can re-apply the coordinate transformation performed by texture synthesis onto a new image.
+
+#### API - [07_repeat_transform](lib/examples/07_repeat_transform.rs)
+
+```rust
+use texture_synthesis as ts;
+
+fn main() -> Result<(), ts::Error> {
+    //create a new session
+    let texsynth = ts::Session::builder()
+        //load a single example image
+        .add_example(&"imgs/1.jpg")
+        .build()?;
+
+    //generate an image
+    let generated = texsynth.run(None);
+
+    //now we can apply the same transformation of the generated image
+    //onto a new image (which can be used to ensure 1-1 mapping between multiple images)
+    //NOTE: it is important to provide same number and image dimensions as the examples used for synthesis
+    //otherwise, there will be coordinates mismatch
+    let repeat_transform_img = generated
+        .get_coordinate_transform()
+        .apply(&["imgs/1_bw.jpg"])?;
+
+    //save the image to the disk
+    //01 and 01_2 images should match perfectly
+    repeat_transform_img.save("out/01_2.jpg").unwrap();
+    generated.save("out/01.jpg")
+}
+```
+
+### 8. Combining texture synthesis 'verbs'
 
 We can also combine multiple modes together. For example, multi-example guided synthesis:
 
@@ -281,14 +317,36 @@ Or chaining multiple stages of generation together:
 
 For more use cases and examples, please refer to the presentation ["More Like This, Please! Texture Synthesis and Remixing from a Single Example"](https://youtu.be/fMbK7PYQux4)
 
+### 9. Additional CLI functionality
+
+Some functionality is only exposed through the CLI and not built into the library.
+
+#### `flip-and-rotate`
+
+This subcommand takes each example and performs flip and rotation transformations to it to generate additional example inputs for generation. This subcommand doesn't support target or example guides.
+
+Example: `cargo run --release -- -o out/output.png flip-and-rotate imgs/1.jpg`
+
 ## Command line binary
 
-* [Download the binary](https://github.com/EmbarkStudios/texture-synthesis/releases) for your OS, or install it from source, `cargo install --path=.`. **Note:** if you want to show a progress window you will need to enable the
-`progress` feature, eg. `cargo install --path=. --features="progress"`
+* [Download the binary](https://github.com/EmbarkStudios/texture-synthesis/releases) for your OS.
+* **Or** Install it from source.
+  * [Install Rust](https://www.rust-lang.org/tools/install) - The minimum required version is `1.37.0`
+  * [Clone this repo](https://help.github.com/en/articles/cloning-a-repository)
+  * In a terminal `cd` to the directory you cloned this repository into
+  * Run `cargo install --path=cli`
+  * **Or** if you wish to see the texture as it is being synthesized `cargo install --path=cli --features="progress"`
 * Open a terminal
 * Navigate to the directory where you downloaded the binary, if you didn't just `cargo install` it
 * Run `texture_synthesis --help` to get a list of all of the options and commands you can run
 * Refer to the examples section in this readme for examples of running the binary
+
+## Notes
+
+* By default, generating output will use all of your logical cores
+* When using multiple threads for generation, the output image is not guaranteed to be deterministic with the same inputs. To have 100% determinism, you must use a thread count of one, which can by done via
+  * CLI - `texture-synthesis --threads 1`
+  * API - `SessionBuilder::max_thread_count(1)`
 
 ## Limitations
 
@@ -331,4 +389,3 @@ at your option.
 ### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
-

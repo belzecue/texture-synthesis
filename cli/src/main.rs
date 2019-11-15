@@ -1,8 +1,12 @@
+#![warn(clippy::all)]
+#![warn(rust_2018_idioms)]
+
 use structopt::StructOpt;
 
 use std::path::PathBuf;
 use texture_synthesis::{
-    image::ImageOutputFormat as ImgFmt, Dims, Error, Example, ImageSource, SampleMethod, Session,
+    image::ImageOutputFormat as ImgFmt, load_dynamic_image, Dims, Error, Example, ImageSource,
+    SampleMethod, Session,
 };
 
 fn parse_size(input: &str) -> Result<Dims, std::num::ParseIntError> {
@@ -58,6 +62,17 @@ struct TransferStyle {
 }
 
 #[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+struct FlipAndRotate {
+    /// Path(s) to example images used to synthesize a new image. Each example
+    /// is rotated 4 times, and flipped once around each axis, resulting in a
+    /// total of 7 example inputs per example, so it is recommended you only
+    /// use 1 example input, even if you can pass as many as you like.
+    #[structopt(parse(from_os_str))]
+    examples: Vec<PathBuf>,
+}
+
+#[derive(StructOpt)]
 enum Subcommand {
     /// Transfers the style from an example onto a target guide
     #[structopt(name = "transfer-style")]
@@ -65,6 +80,10 @@ enum Subcommand {
     /// Generates a new image from 1 or more examples
     #[structopt(name = "generate")]
     Generate(Generate),
+    /// Generates a new image from 1 or more examples, extended with their
+    /// flipped and rotated versions
+    #[structopt(name = "flip-and-rotate")]
+    FlipAndRotate(FlipAndRotate),
 }
 
 #[derive(StructOpt)]
@@ -167,6 +186,10 @@ struct Opt {
     debug_out_dir: Option<PathBuf>,
     /// The maximum number of worker threads that can be active at any one time
     /// while synthesizing images. Defaults to the logical core count.
+    ///
+    /// Note that setting this to `1` will allow you to generate 100%
+    /// deterministic output images (considering all other inputs are
+    /// the same)
     #[structopt(short = "t", long = "threads")]
     max_threads: Option<usize>,
     #[structopt(flatten)]
@@ -211,6 +234,29 @@ fn real_main() -> Result<(), Error> {
             }
 
             (examples, gen.target_guide.as_ref())
+        }
+        Subcommand::FlipAndRotate(fr) => {
+            let example_imgs = fr
+                .examples
+                .iter()
+                .map(|path| load_dynamic_image(ImageSource::Path(path)))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut transformed: Vec<Example<'_>> = Vec::with_capacity(example_imgs.len() * 7);
+            for img in &example_imgs {
+                transformed.push(Example::new(img.fliph()));
+                transformed.push(Example::new(img.rotate90()));
+                transformed.push(Example::new(img.fliph().rotate90()));
+                transformed.push(Example::new(img.rotate180()));
+                transformed.push(Example::new(img.fliph().rotate180()));
+                transformed.push(Example::new(img.rotate270()));
+                transformed.push(Example::new(img.fliph().rotate270()));
+            }
+
+            let mut examples: Vec<_> = example_imgs.into_iter().map(Example::new).collect();
+            examples.append(&mut transformed);
+
+            (examples, None)
         }
         Subcommand::TransferStyle(ts) => (vec![Example::new(&ts.style)], Some(&ts.guide)),
     };

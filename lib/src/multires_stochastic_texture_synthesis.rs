@@ -4,7 +4,7 @@ use rstar::RTree;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use crate::{img_pyramid::*, unsync::*, Dims, SamplingMethod};
+use crate::{img_pyramid::*, unsync::*, CoordinateTransform, Dims, SamplingMethod};
 
 #[derive(Debug)]
 pub struct GeneratorParams {
@@ -300,15 +300,19 @@ impl Generator {
                 let y_t = self.output_size.height as i32 - y_b;
 
                 if a[0] < x_l {
-                    rtree.insert([a[0] + (self.output_size.width as i32), a[1]]); // +x
+                    rtree.insert([a[0] + (self.output_size.width as i32), a[1]]);
+                // +x
                 } else if a[0] > x_r {
-                    rtree.insert([a[0] - (self.output_size.width as i32), a[1]]); // -x
+                    rtree.insert([a[0] - (self.output_size.width as i32), a[1]]);
+                    // -x
                 }
 
                 if a[1] < y_b {
-                    rtree.insert([a[0], a[1] + (self.output_size.height as i32)]); // +Y
+                    rtree.insert([a[0], a[1] + (self.output_size.height as i32)]);
+                // +Y
                 } else if a[1] > y_t {
-                    rtree.insert([a[0], a[1] - (self.output_size.height as i32)]); // -Y
+                    rtree.insert([a[0], a[1] - (self.output_size.height as i32)]);
+                    // -Y
                 }
             }
             resolved.push((*b, *score));
@@ -521,7 +525,7 @@ impl Generator {
         k_neighs: &[SignedCoord2D],
         example_maps: &[ImageBuffer<'_>],
         valid_samples_mask: &[SamplingMethod],
-        m: u32,
+        m_rand: u32,
         m_seed: u64,
     ) -> &'a [CandidateStruct] {
         let mut candidate_count = 0;
@@ -589,7 +593,7 @@ impl Generator {
         let mut rng = Pcg32::seed_from_u64(m_seed);
 
         //random candidates
-        for _ in 0..m {
+        for _ in 0..m_rand {
             let rand_map = (rng.gen_range(0, example_maps.len())) as u32;
             let dims = example_maps[rand_map as usize].dimensions();
             let dims = Dims {
@@ -691,6 +695,29 @@ impl Generator {
         }
 
         uncertainty_map
+    }
+
+    pub fn get_coord_transform(&self) -> CoordinateTransform {
+        //init empty 32bit image
+        let mut buffer: Vec<u32> = Vec::new();
+        let mut max_map_id = 1;
+        //populate the image with colors
+        for (coord, map_id) in self.coord_map.as_ref().iter() {
+            // coord to color
+            let r = coord.x;
+            let g = coord.y;
+            let b = map_id.0;
+            if max_map_id < b {
+                max_map_id = b;
+            }
+            //record the color
+            buffer.extend_from_slice(&[r, g, b]);
+        }
+        CoordinateTransform {
+            buffer,
+            dims: Dims::new(self.output_size.width, self.output_size.height),
+            max_map_id,
+        }
     }
 
     //replace every resolved pixel with a pixel from a new level
@@ -1190,10 +1217,8 @@ fn get_single_example_level<'a>(
 fn get_single_guide_level(
     guides_pyramid: &Option<GuidesPyramidStruct>,
     pyramid_level: usize,
-) -> Option<GuidesStruct> {
-    if let Some(ref guides_pyr) = guides_pyramid {
-        Some(guides_pyr.to_guides_struct(pyramid_level))
-    } else {
-        None
-    }
+) -> Option<GuidesStruct<'_>> {
+    guides_pyramid
+        .as_ref()
+        .map(|guides_pyr| guides_pyr.to_guides_struct(pyramid_level))
 }

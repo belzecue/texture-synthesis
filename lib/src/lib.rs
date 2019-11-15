@@ -1,3 +1,6 @@
+#![warn(clippy::all)]
+#![warn(rust_2018_idioms)]
+
 //! `texture-synthesis` is a light API for Multiresolution Stochastic Texture Synthesis,
 //! a non-parametric example-based algorithm for image generation.
 //!
@@ -51,6 +54,7 @@ use std::path::Path;
 mod unsync;
 
 pub use image;
+pub use utils::load_dynamic_image;
 pub use utils::ImageSource;
 
 pub use errors::Error;
@@ -70,6 +74,44 @@ impl Dims {
     }
     pub fn new(width: u32, height: u32) -> Self {
         Self { width, height }
+    }
+}
+
+pub struct CoordinateTransform {
+    buffer: Vec<u32>,
+    dims: Dims,
+    max_map_id: u32, // total number of maps required to perform transformation
+}
+
+impl<'a> CoordinateTransform {
+    /// Applies the coordinate transformation from new source images. Important to ensure that you have same number and sizes of the images as during synthesis where the coordinate transform was saved from
+    pub fn apply<E: Into<ImageSource<'a>>, I: IntoIterator<Item = E>>(
+        &self,
+        source: I,
+    ) -> Result<image::RgbaImage, Error> {
+        let ref_maps: Vec<image::RgbaImage> = source
+            .into_iter()
+            .map(|t| load_image(t.into(), None))
+            .collect::<Result<Vec<_>, Error>>()?;
+        //assert same number of maps
+        if ref_maps.len() as u32 != self.max_map_id {
+            return Err(Error::MapsCountMismatch(
+                ref_maps.len() as u32,
+                self.max_map_id,
+            ));
+        }
+        //init new empty image
+        let mut img = image::RgbaImage::new(self.dims.width, self.dims.height);
+        // populate with pixels from ref maps
+        for (i, pix) in img.pixels_mut().enumerate() {
+            let x = self.buffer[i * 3];
+            let y = self.buffer[i * 3 + 1];
+            let map = self.buffer[i * 3 + 2];
+
+            *pix = *ref_maps[map as usize].get_pixel(x, y);
+        }
+
+        Ok(img)
     }
 }
 
@@ -166,6 +208,23 @@ impl GeneratedImage {
         Ok(())
     }
 
+    /// Get coordinate transform of this generated image, which can be repeated on a new image
+    /// ```no_run
+    /// use texture_synthesis as ts;
+    ///  //create a new session
+    /// let texsynth = ts::Session::builder()
+    /// //load a single example image
+    /// .add_example(&"imgs/1.jpg")
+    /// .build().unwrap();
+    /// //generate an image
+    /// let generated = texsynth.run(None);
+    /// //now we can repeat the same transformation on a different image
+    /// let repeated_transform_image = generated.get_coordinate_transform().apply(&["imgs/2.jpg"]);
+    /// ```
+    pub fn get_coordinate_transform(&self) -> CoordinateTransform {
+        self.inner.get_coord_transform()
+    }
+
     /// Returns the generated output image
     pub fn into_image(self) -> image::DynamicImage {
         image::DynamicImage::ImageRgba8(self.inner.color_map.into_inner())
@@ -179,16 +238,19 @@ impl AsRef<image::RgbaImage> for GeneratedImage {
 }
 
 /// Method used for sampling an example image.
-pub enum SampleMethod<'a> {
+pub enum GenericSampleMethod<Img> {
     /// All pixels in the example image can be sampled.
     All,
     /// No pixels in the example image will be sampled.
     Ignore,
     /// Pixels are selectively sampled based on an image.
-    Image(ImageSource<'a>),
+    Image(Img),
 }
 
-impl<'a> SampleMethod<'a> {
+pub type SampleMethod<'a> = GenericSampleMethod<ImageSource<'a>>;
+pub type SamplingMethod = GenericSampleMethod<image::RgbaImage>;
+
+impl<Img> GenericSampleMethod<Img> {
     #[inline]
     fn is_ignore(&self) -> bool {
         match self {
@@ -204,23 +266,6 @@ where
 {
     fn from(is: IS) -> Self {
         SampleMethod::Image(is.into())
-    }
-}
-
-/// Internal sample method
-pub enum SamplingMethod {
-    All,
-    Ignore,
-    Image(image::RgbaImage),
-}
-
-impl SamplingMethod {
-    #[inline]
-    fn is_ignore(&self) -> bool {
-        match self {
-            Self::Ignore => true,
-            _ => false,
-        }
     }
 }
 
@@ -656,7 +701,7 @@ impl<'a> SessionBuilder<'a> {
                 min: 0.0,
                 max: 1.0,
                 value: self.params.cauchy_dispersion,
-                name: "cauchy_dispersion",
+                name: "cauchy-dispersion",
             }));
         }
 
@@ -665,7 +710,7 @@ impl<'a> SessionBuilder<'a> {
                 min: 0.0,
                 max: 1.0,
                 value: self.params.backtrack_percent,
-                name: "backtrack_percent",
+                name: "backtrack-percent",
             }));
         }
 
@@ -674,7 +719,7 @@ impl<'a> SessionBuilder<'a> {
                 min: 0.0,
                 max: 1.0,
                 value: self.params.guide_alpha,
-                name: "guide_alpha",
+                name: "guide-alpha",
             }));
         }
 
@@ -684,9 +729,18 @@ impl<'a> SessionBuilder<'a> {
                     min: 1.0,
                     max: 1024.0,
                     value: max_count as f32,
-                    name: "max_thread_count",
+                    name: "max-thread-count",
                 }));
             }
+        }
+
+        if self.params.random_sample_locations == 0 {
+            return Err(Error::InvalidRange(errors::InvalidRange {
+                min: 1.0,
+                max: 1024.0,
+                value: self.params.random_sample_locations as f32,
+                name: "m-rand",
+            }));
         }
 
         Ok(())
